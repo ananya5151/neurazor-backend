@@ -1,0 +1,22 @@
+{
+    "name": "neurazor-backend",
+    "version": "0.1.0",
+    "main": "src/server.js",
+    "scripts": {
+        "start": "node src/server.js",
+        "dev": "nodemon src/server.js"
+    },
+    "dependencies": {
+        "@supabase/supabase-js": "^2.80.0",
+        "cors": "^2.8.5",
+        "dotenv": "^17.2.3",
+        "express": "^4.21.2"
+    },
+    "devDependencies": {
+        "nodemon": "^2.0.22"
+    },
+    "description": "This repository contains a minimal Node/Express scaffold for the Neurazor backend.",
+    "keywords": ["neurazor", "assessment", "scoring"],
+    "author": "Ananya",
+    "license": "MIT"
+}
