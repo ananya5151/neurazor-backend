@@ -10,13 +10,18 @@
         "@supabase/supabase-js": "^2.80.0",
         "cors": "^2.8.5",
         "dotenv": "^17.2.3",
+        "expr-eval": "^2.0.2",
         "express": "^4.21.2"
     },
     "devDependencies": {
         "nodemon": "^2.0.22"
     },
     "description": "This repository contains a minimal Node/Express scaffold for the Neurazor backend.",
-    "keywords": ["neurazor", "assessment", "scoring"],
+    "keywords": [
+        "neurazor",
+        "assessment",
+        "scoring"
+    ],
     "author": "Ananya",
     "license": "MIT"
 }

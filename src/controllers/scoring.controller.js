@@ -1,113 +1,212 @@
-const scoringService = require('../services/scoring.service');
+const formulaEvaluator = require('../services/formulaEvaluator');
+const scoringCalculator = require('../services/scoringCalculator');
+const variableExtractor = require('../services/variableExtractor');
+const supabase = require('../config/supabase');
 
-class ScoringController {
-  
-  /**
-   * GET /api/scoring/active/:gameType
-   * Get active scoring configuration
-   */
-  async getActive(req, res) {
-    try {
-      const { gameType } = req.params;
-      const version = await scoringService.getActiveVersion(gameType);
-      
-      res.json({
-        success: true,
-        data: version
-      });
-    } catch (error) {
-      res.status(500).json({
+// Validate formula
+exports.validateFormula = async (req, res) => {
+  try {
+    const { formula, test_variables } = req.body;
+
+    if (!formula) {
+      return res.status(400).json({
         success: false,
-        error: error.message
+        error: 'Formula is required'
       });
     }
-  }
 
-  /**
-   * GET /api/scoring/versions/:gameType
-   * Get all versions for a game
-   */
-  async getAllVersions(req, res) {
-    try {
-      const { gameType } = req.params;
-      const versions = await scoringService.getAllVersions(gameType);
-      
-      res.json({
+    const validation = formulaEvaluator.validateFormula(formula);
+
+    if (!validation.valid) {
+      return res.json({
         success: true,
-        data: versions
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error.message
+        valid: false,
+        error: validation.error
       });
     }
-  }
 
-  /**
-   * POST /api/scoring/save
-   * Save new scoring version
-   */
-  async saveNewVersion(req, res) {
-    try {
-      const { game_type, config, user_id, description } = req.body;
+    let testResult = null;
+    if (test_variables) {
+      const testResponse = formulaEvaluator.testFormula(formula, test_variables);
+      if (!testResponse.success) {
+        return res.json({
+          success: true,
+          valid: false,
+          error: testResponse.error
+        });
+      }
+      testResult = testResponse.result;
+    }
+
+    const variables = formulaEvaluator.getFormulaVariables(formula);
+
+    res.json({
+      success: true,
+      valid: true,
+      variables: variables,
+      test_result: testResult
+    });
+
+  } catch (error) {
+    console.error('Error validating formula:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Preview scores
+exports.previewScores = async (req, res) => {
+  try {
+    const { game_type, formulas, weights, test_variables } = req.body;
+
+    if (!game_type || !formulas || !weights || !test_variables) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields'
+      });
+    }
+
+    const scores = {};
+    let totalWeighted = 0;
+
+    for (const [name, formula] of Object.entries(formulas)) {
+      const testResponse = formulaEvaluator.testFormula(formula, test_variables);
       
-      if (!game_type || !config) {
-        return res.status(400).json({
+      if (!testResponse.success) {
+        return res.json({
           success: false,
-          error: 'game_type and config are required'
+          error: `Formula error in ${name}: ${testResponse.error}`
         });
       }
 
-      const newVersion = await scoringService.saveNewVersion(
-        game_type,
-        config,
-        user_id,
-        description
-      );
-      
-      res.json({
-        success: true,
-        message: `Saved as ${newVersion.version_name}`,
-        data: newVersion
-      });
-    } catch (error) {
-      res.status(500).json({
+      const rawScore = Math.max(0, Math.min(100, testResponse.result));
+      const weight = weights[name] || 0;
+      const weighted = rawScore * weight;
+
+      scores[name] = {
+        raw: rawScore,
+        weight: weight,
+        weighted: weighted
+      };
+
+      totalWeighted += weighted;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        scores: {
+          final_score: Math.round(totalWeighted * 100) / 100,
+          competencies: scores
+        },
+        test_variables: test_variables
+      }
+    });
+
+  } catch (error) {
+    console.error('Error previewing scores:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Compare versions
+exports.compareVersions = async (req, res) => {
+  try {
+    const { game_type, version_ids, test_data } = req.body;
+
+    if (!game_type || !version_ids || !Array.isArray(version_ids) || version_ids.length < 2) {
+      return res.status(400).json({
         success: false,
-        error: error.message
+        error: 'Need at least 2 version IDs to compare'
       });
     }
-  }
 
-  /**
-   * POST /api/scoring/set-active
-   * Set a version as active
-   */
-  async setActive(req, res) {
-    try {
-      const { game_type, version_name } = req.body;
-      
-      if (!game_type || !version_name) {
-        return res.status(400).json({
-          success: false,
-          error: 'game_type and version_name are required'
-        });
+    const { data: versions, error: fetchError } = await supabase
+      .from('scoring_versions')
+      .select('*')
+      .eq('game_type', game_type)
+      .in('id', version_ids);
+
+    if (fetchError) throw fetchError;
+
+    if (!versions || versions.length < 2) {
+      return res.status(404).json({
+        success: false,
+        error: 'Could not find all specified versions'
+      });
+    }
+
+    const comparisons = [];
+
+    for (const version of versions) {
+      const scores = {};
+      let totalWeighted = 0;
+
+      for (const [name, formula] of Object.entries(version.config.competency_formulas || {})) {
+        const result = formulaEvaluator.evaluate(formula, test_data);
+        const rawScore = Math.max(0, Math.min(100, result));
+        const weight = version.config.final_weights[name] || 0;
+        const weighted = rawScore * weight;
+
+        scores[name] = {
+          raw: rawScore,
+          weight: weight,
+          weighted: weighted,
+          formula: formula
+        };
+
+        totalWeighted += weighted;
       }
 
-      const version = await scoringService.setActiveVersion(game_type, version_name);
-      
-      res.json({
-        success: true,
-        message: `${version_name} is now active`,
-        data: version
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error.message
+      comparisons.push({
+        version_name: version.version_name,
+        version_id: version.id,
+        description: version.description,
+        final_score: Math.round(totalWeighted * 100) / 100,
+        competencies: scores,
+        formulas: version.config.competency_formulas,
+        weights: version.config.final_weights
       });
     }
-  }
-}
 
-module.exports = new ScoringController();
+    res.json({
+      success: true,
+      data: {
+        comparisons: comparisons,
+        test_data: test_data
+      }
+    });
+
+  } catch (error) {
+    console.error('Error comparing versions:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Get available variables
+exports.getAvailableVariables = async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    const variables = variableExtractor.getAvailableVariables(gameType);
+
+    res.json({
+      success: true,
+      data: variables
+    });
+
+  } catch (error) {
+    console.error('Error getting variables:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
