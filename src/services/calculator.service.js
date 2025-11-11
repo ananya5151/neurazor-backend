@@ -243,27 +243,54 @@ class CalculatorService {
 
         const correctEntries = rawData.correct_entries || 0;
         const incorrectEntries = rawData.incorrect_entries || 0;
-        const totalEmpty = rawData.total_empty_cells || 16;
+        // Prefer explicit total_empty_cells, fall back to grid_size (grid_size^2) or 0
+        const totalEmpty = (typeof rawData.total_empty_cells === 'number' && rawData.total_empty_cells > 0)
+            ? rawData.total_empty_cells
+            : (rawData.grid_size ? (rawData.grid_size * rawData.grid_size) : 0);
         const timeLeft = rawData.time_left_sec || 0;
         const totalTime = rawData.total_time_allowed || 60;
-        const avgTimePerCorrect = rawData.avg_time_per_correct_entry || 1;
+        const avgTimePerCorrect = rawData.avg_time_per_correct_entry || 0;
         const difficultyMultiplier = rawData.difficulty_multiplier || 1;
 
-        // Accuracy
-        const accuracy = Math.max(0, ((correctEntries / totalEmpty) * 100) - (incorrectEntries * (penalties.incorrect_penalty || 3)));
 
-        // Reasoning
-        const totalAttempts = correctEntries + incorrectEntries;
-        const reasoning = ((correctEntries / Math.max(1, totalAttempts)) * 100) * difficultyMultiplier;
+        // Defensive guards
+        const safeTotalEmpty = Math.max(0, totalEmpty);
+        const totalAttempts = (rawData.total_attempts || (correctEntries + incorrectEntries));
 
-        // Speed
-        const speed = (timeLeft / totalTime * 50) + (50 / (avgTimePerCorrect + 1));
+        // Completion percentage (prefer any precomputed value)
+        const completionPercent = (typeof rawData.completion_percent === 'number')
+            ? rawData.completion_percent
+            : (safeTotalEmpty > 0 ? (correctEntries / safeTotalEmpty) * 100 : 0);
 
-        // Math
-        const math = (correctEntries / totalEmpty) * 100;
+        // Accuracy: prefer provided accuracy_percent; otherwise compute and apply per-incorrect penalties (points)
+        const baseAccuracy = (typeof rawData.accuracy_percent === 'number')
+            ? rawData.accuracy_percent
+            : (safeTotalEmpty > 0 ? ((correctEntries / safeTotalEmpty) * 100) : 0);
 
-        // Attention to Detail
-        const attentionToDetail = (accuracy * 0.6) + (rawData.correct_first_attempts || 0) / totalEmpty * 40;
+        const incorrectPenaltyPoints = penalties.incorrect_penalty_points ?? penalties.incorrect_penalty ?? 3; // keep backward compatibility
+        const accuracy = Math.max(0, baseAccuracy - (incorrectEntries * incorrectPenaltyPoints));
+
+        // Reasoning: proportion of correct over attempts, scaled by difficulty
+        const reasoning = (totalAttempts > 0)
+            ? ((correctEntries / totalAttempts) * 100) * difficultyMultiplier
+            : completionPercent * difficultyMultiplier;
+
+        // Speed: combine time-left and average entry speed into 0-100
+        // timeLeftPercent: how much time remained as percentage
+        const timeLeftPercent = totalTime > 0 ? (timeLeft / totalTime) * 100 : 0;
+        // avgTimeBaseline: expected average time per entry if user used the whole time
+        const avgTimeBaseline = safeTotalEmpty > 0 ? (totalTime / safeTotalEmpty) : totalTime || 1;
+        // avgTimePenalty: higher avgTimePerCorrect increases penalty (0-100)
+        const avgTimePenalty = avgTimePerCorrect > 0 ? Math.min(100, (avgTimePerCorrect / avgTimeBaseline) * 100) : 0;
+        // speed is better when time left is high and avg time per correct is low
+        const speed = Math.max(0, Math.min(100, (timeLeftPercent * 0.6) + ((100 - avgTimePenalty) * 0.4)));
+
+        // Math competency ~ completion percent
+        const math = completionPercent;
+
+        // Attention to Detail: mix of accuracy and first-attempt correctness
+        const correctFirstAttemptsPercent = safeTotalEmpty > 0 ? ((rawData.correct_first_attempts || 0) / safeTotalEmpty) * 100 : 0;
+        const attentionToDetail = (accuracy * 0.6) + (correctFirstAttemptsPercent * 0.4);
 
         const finalScore =
             (accuracy * weights.accuracy) +

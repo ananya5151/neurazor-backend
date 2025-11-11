@@ -22,19 +22,19 @@ class VariableExtractor {
       case 'mental_math_sprint':
         this.extractMentalMathVariables(variables, rawData, config);
         break;
-      
+
       case 'stroop_test':
         this.extractStroopVariables(variables, rawData, config);
         break;
-      
+
       case 'sign_sudoku':
         this.extractSudokuVariables(variables, rawData, config);
         break;
-      
+
       case 'face_name_match':
         this.extractFaceNameVariables(variables, rawData, config);
         break;
-      
+
       case 'card_flip_challenge':
         this.extractCardFlipVariables(variables, rawData, config);
         break;
@@ -53,15 +53,15 @@ class VariableExtractor {
     variables.total = rawData.length;
     variables.correct = rawData.filter(item => item.is_correct).length;
     variables.incorrect = variables.total - variables.correct;
-    variables.accuracy_percent = variables.total > 0 
-      ? (variables.correct / variables.total) * 100 
+    variables.accuracy_percent = variables.total > 0
+      ? (variables.correct / variables.total) * 100
       : 0;
 
     // Time statistics
     const times = rawData.map(item => item.time_taken || 0);
     variables.total_time = times.reduce((sum, t) => sum + t, 0);
-    variables.avg_time = variables.total > 0 
-      ? variables.total_time / variables.total 
+    variables.avg_time = variables.total > 0
+      ? variables.total_time / variables.total
       : 0;
     variables.min_time = times.length > 0 ? Math.min(...times) : 0;
     variables.max_time = times.length > 0 ? Math.max(...times) : 0;
@@ -122,9 +122,22 @@ class VariableExtractor {
     });
 
     // Calculate derived variables
-    if (variables.total_empty_cells > 0) {
-      variables.completion_percent = (variables.correct_entries / variables.total_empty_cells) * 100;
-      variables.accuracy_percent = ((variables.correct_entries - variables.incorrect_entries) / variables.total_empty_cells) * 100;
+    const safeTotal = Math.max(0, variables.total_empty_cells);
+    if (safeTotal > 0) {
+      const completion = (variables.correct_entries / safeTotal) * 100;
+      const accuracy = ((variables.correct_entries - variables.incorrect_entries) / safeTotal) * 100;
+      // Clamp to [0,100] to avoid negative or >100 values
+      variables.completion_percent = Math.max(0, Math.min(100, completion));
+      variables.accuracy_percent = Math.max(0, Math.min(100, accuracy));
+    } else {
+      variables.completion_percent = 0;
+      variables.accuracy_percent = 0;
+    }
+
+    // If total_attempts not provided, infer from entries
+    if (!variables.total_attempts) {
+      const inferred = variables.correct_entries + variables.incorrect_entries;
+      variables.total_attempts = inferred;
     }
   }
 
